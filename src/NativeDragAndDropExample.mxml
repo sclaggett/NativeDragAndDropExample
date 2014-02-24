@@ -1,0 +1,325 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009" 
+			   xmlns:s="library://ns.adobe.com/flex/spark" 
+			   xmlns:mx="library://ns.adobe.com/flex/mx" 
+			   width="900" height="500"
+			   creationComplete="OnCreationComplete()">
+	<fx:Script>
+		<![CDATA[
+			import com.sclaggett.dnd.BrowserUploadFile;
+			import com.sclaggett.dnd.DragAndDrop;
+			import com.sclaggett.dnd.DragAndDropEvent;
+			import com.sclaggett.dnd.DragAndDropFile;
+			
+			import mx.collections.ArrayCollection;
+			import mx.controls.Alert;
+			import mx.managers.PopUpManager;
+			
+			import spark.components.gridClasses.GridSelectionMode;
+			
+			// Application colors.
+			protected static var BACKGROUND_COLOR:uint = 0xCCCCCC;
+			protected static var BACKGROUND_COLOR_INVALID_TARGET:uint = 0xB22222;
+			protected static var BACKGROUND_COLOR_DROP_TARGET:uint = 0x228B22;
+			
+			// URL where the files will be uploaded to.
+			protected static var SERVER_UPLOAD_URL:String = "http://{target_server}/{target_path}";
+
+			// Bindable variable to easily change the background color of the application.
+			[Bindable]
+			protected var backgroundColor:uint = BACKGROUND_COLOR;
+			
+			// Bindable array of GridFile objects to display in the data grid.
+			[Bindable]
+			protected var fileList:ArrayCollection = new ArrayCollection();
+			
+			// Reference to the progress popup displayed during file load and upload.
+			protected var progressPopUp:ProgressPopup;
+
+			/**
+			 * Drag and drop initialization.
+			 */
+			
+			protected function OnCreationComplete():void
+			{
+				// Configure the drag and drop mechanism. We're using the default settings here to illustrate
+				// the available options, so the following lines are not really necessary.
+				DragAndDrop.disableMainWindow = true;
+				DragAndDrop.enableFileTransfer = true;
+				DragAndDrop.fileTransferThreshold = 40 * 1024 * 1024;
+				DragAndDrop.enableFileBrowse = true;
+				DragAndDrop.enableFileUpload = true;
+				
+				// Add listeners to receive all drag and drop events.
+				DragAndDrop.addEventListener(DragAndDropEvent.DRAG_ENTER, OnDragEnter);
+				DragAndDrop.addEventListener(DragAndDropEvent.DRAG_LEAVE, OnDragLeave);
+				DragAndDrop.addEventListener(DragAndDropEvent.DROP_START, OnDropStart);
+				DragAndDrop.addEventListener(DragAndDropEvent.DROP_STOP, OnDropStop);
+				DragAndDrop.addEventListener(DragAndDropEvent.UPLOAD_START, OnUploadStart);
+				DragAndDrop.addEventListener(DragAndDropEvent.UPLOAD_PROGRESS, OnUploadProgress);
+				DragAndDrop.addEventListener(DragAndDropEvent.UPLOAD_FILE, OnUploadFile);
+				DragAndDrop.addEventListener(DragAndDropEvent.UPLOAD_ERROR, OnUploadError);
+				DragAndDrop.addEventListener(DragAndDropEvent.UPLOAD_STOP, OnUploadStop);
+				
+				// There are two drag and drop events that should be handled synchronously: drag over and
+				// add file. Register callbacks for these events.
+				DragAndDrop.dragOverCallback = DragOverCallback;
+				DragAndDrop.dropFileCallback = DropFileCallback;
+				
+				// Initialize the drag and drop control.
+				var result:String = DragAndDrop.initialize();
+				if (result != "")
+				{
+					Alert.show("Failed to initialize drag and drop", result);
+				}
+			}
+
+			/**
+			 * Event handlers for drag and drop control.
+			 */
+			
+			protected function OnDragEnter(event:DragAndDropEvent):void
+			{
+				statusLabel.text = "Drag operation in progress, not a valid drop target";
+				backgroundColor = BACKGROUND_COLOR_INVALID_TARGET;
+			}
+			
+			protected function OnDragLeave(event:DragAndDropEvent):void
+			{
+				statusLabel.text = "";
+				backgroundColor = BACKGROUND_COLOR;
+			}
+			
+			protected function OnDropStart(event:DragAndDropEvent):void
+			{
+				statusLabel.text = "";
+				backgroundColor = BACKGROUND_COLOR;
+				var progressText:String = "Loading " + event.filesTotal + " file";
+				if (event.filesTotal > 1)
+				{
+					progressText += "s"
+				}
+				ShowProgressPopUp(progressText);
+			}
+			
+			protected function OnDropStop(event:DragAndDropEvent):void
+			{
+				HideProgressPopUp();
+			}
+			
+			protected function OnUploadStart(event:DragAndDropEvent):void
+			{
+				var progressText:String = "Uploading " + event.filesTotal + " file";
+				if (event.filesTotal > 1)
+				{
+					progressText += "s"
+				}
+				ShowProgressPopUp(progressText);
+			}
+			
+			protected function OnUploadProgress(event:DragAndDropEvent):void
+			{
+				SetFileStatus(event.fileName, event.percentComplete + "%");
+			}
+			
+			protected function OnUploadFile(event:DragAndDropEvent):void
+			{
+				progressPopUp.percentComplete = event.filesProcessed * 100 / event.filesTotal;
+
+				SetFileStatus(event.fileName, "Uploaded");
+			}
+			
+			protected function OnUploadError(event:DragAndDropEvent):void
+			{
+				statusLabel.text = "Error uploading file " + event.fileName;
+				SetFileStatus(event.fileName, "Error");
+			}
+			
+			protected function OnUploadStop(event:DragAndDropEvent):void
+			{
+				HideProgressPopUp();
+			}
+			
+			/**
+			 * Callbacks for drag and drop control.
+			 */
+
+			protected function DragOverCallback(clientX:int, clientY:int):String
+			{
+				if (dropGrid.hitTestPoint(clientX, clientY) == true)
+				{
+					if (backgroundColor != BACKGROUND_COLOR_DROP_TARGET)
+					{
+						statusLabel.text = "Drag operation in progress, over drop target";
+						backgroundColor = BACKGROUND_COLOR_DROP_TARGET;
+					}
+					return DragAndDrop.DROPEFFECT_MOVE;
+				}
+				else
+				{
+					if (backgroundColor != BACKGROUND_COLOR_INVALID_TARGET)
+					{
+						statusLabel.text = "Drag operation in progress, not a valid drop target";
+						backgroundColor = BACKGROUND_COLOR_INVALID_TARGET;
+					}
+					return DragAndDrop.DROPEFFECT_NONE;
+				}
+			}
+			
+			protected function DropFileCallback(file:DragAndDropFile,filesLoaded:int, filesTotal:int):Boolean
+			{
+				progressPopUp.percentComplete = filesLoaded * 100 / filesTotal;
+				
+				var gridFile:GridFile = new GridFile();
+				gridFile.name = file.name;
+				gridFile.size = file.size;
+				gridFile.type = file.type;
+				gridFile.modifiedDate = file.modifiedDate;
+				gridFile.data = file.data;
+				if (file.data != null)
+				{
+					gridFile.dataLoaded = "Yes";
+				}
+				else
+				{
+					gridFile.dataLoaded = "No";
+				}
+				gridFile.status = "";
+				fileList.addItem(gridFile);
+				return true;
+			}
+
+			/**
+			 * Internal functions.
+			 */
+
+			protected function ShowProgressPopUp(text:String):void
+			{
+				progressPopUp = new ProgressPopup();
+				progressPopUp.text = text;
+				progressPopUp.percentComplete = 0;
+				PopUpManager.addPopUp(progressPopUp, this, true);
+				PopUpManager.centerPopUp(progressPopUp);
+			}
+			
+			protected function HideProgressPopUp():void
+			{
+				if (progressPopUp != null)
+				{
+					PopUpManager.removePopUp(progressPopUp);
+					progressPopUp = null;
+				}
+			}
+
+			protected function SetFileStatus(name:String, status:String):void
+			{
+				for each (var file:Object in fileList)
+				{
+					if (file.name == name)
+					{
+						file.status = status;
+						return;
+					}
+				}
+			}
+
+			protected function OnGridSelectionChange():void
+			{
+				for each (var file:Object in fileList)
+				{
+					if (file.status == "")
+					{
+						uploadButton.enabled = true;
+						return;
+					}
+				}
+				uploadButton.enabled = false;
+			}
+			
+			protected function OnUploadFiles():void
+			{
+				var uploadFiles:Array = new Array();
+				for each (var gridFile:GridFile in dropGrid.selectedItems)
+				{
+					if (gridFile.status == "")
+					{
+						var uploadFile:BrowserUploadFile = new BrowserUploadFile();
+						uploadFile.name = gridFile.name;
+						uploadFile.method = "POST";
+						uploadFile.url = SERVER_UPLOAD_URL;
+						uploadFiles.push(uploadFile);
+						gridFile.status = "0%";
+					}
+				}
+				if (uploadFiles.length > 0)
+				{
+					DragAndDrop.uploadFiles(uploadFiles);
+				}
+			}
+
+			protected function OnBrowseForFiles():void
+			{
+				if (DragAndDrop.browseForFiles() != true)
+				{
+					Alert.show("Failed to browse for files");
+				}
+			}
+		]]>
+	</fx:Script>
+	
+	<s:Rect width="100%" height="100%">
+		<s:fill>
+			<s:SolidColor color="{backgroundColor}" />
+		</s:fill>
+	</s:Rect>
+	
+	<s:VGroup width="100%" height="100%" 
+			  paddingLeft="15" paddingRight="15" 
+			  paddingTop="15" paddingBottom="15">
+		<s:HGroup width="100%"
+				  verticalAlign="middle">
+			<s:Label width="100%"
+					 fontSize="18"
+					 text="Drag and drop files on the grid" />
+			<s:Button label="Browse for files"
+					  click="OnBrowseForFiles()" />
+			<s:Button id="uploadButton"
+					  label="Upload selected" 
+					  click="OnUploadFiles()" 
+					  enabled="false" />
+		</s:HGroup>
+		<s:DataGrid id="dropGrid"
+					width="100%" height="70%"
+					dataProvider="{fileList}"
+					selectionMode="{GridSelectionMode.MULTIPLE_ROWS}" 
+					selectionChange="OnGridSelectionChange()">
+			<s:columns>
+				<s:ArrayList>
+					<s:GridColumn dataField="name" 
+								  headerText="Name" />
+					<s:GridColumn dataField="size" 
+								  headerText="Size"
+								  width="80" />
+					<s:GridColumn dataField="type" 
+								  headerText="Type" 
+								  width="100" />
+					<s:GridColumn dataField="modifiedDate" 
+								  headerText="Modified Date" 
+								  width="220" />
+					<s:GridColumn dataField="dataLoaded" 
+								  headerText="Loaded" 
+								  width="80" />
+					<s:GridColumn dataField="status" 
+								  headerText="Status" 
+								  width="80" />
+				</s:ArrayList>
+			</s:columns>
+		</s:DataGrid>
+		<s:HGroup width="100%" 
+				  horizontalAlign="center">
+			<s:Label id="statusLabel"
+					 fontSize="15" />
+		</s:HGroup>
+	</s:VGroup>
+</s:Application>
+
